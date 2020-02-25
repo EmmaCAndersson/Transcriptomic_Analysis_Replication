@@ -1,0 +1,22 @@
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("tximport")
+
+library(tximport)
+
+install.packages("data.table")
+library (data.table) #no funciona
+library(readr) #help tximport to read files faster #no funciona
+
+BiocManager::install("edgeR")
+BiocManager::install("limma")
+install.packages("limma")
+install.packages("edgeR")
+library(edgeR) 
+
+BiocManager::install("sva")
+library(nlme)
+library(mgcv)
+library(genefilter)
+library(BiocParallel)
+library(sva)
