@@ -1,0 +1,315 @@
+## PCA analysis
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+
+library(dplyr)
+library(RColorBrewer)
+install.packages("ggplot2")
+library("ggplot2")
+install.packages("ggthemes")
+library("ggthemes")
+library("scales")
+library(Biobase)
+
+
+## Download data - TCGA Normalized
+cancers = c("BLCA","CHOL","COADREAD","DLBC","ESCA","GBM","HNSC","KIRC","LAML","LGG","LIHC","LUAD","LUSC","MESO","OV","PAAD","PRAD","SKCM","STAD","THCA","UCEC") # all cancer except BRCA - which is read before the loop
+TCGA = fread("/projects/qbio/bifo/users/Babak/TCGA_CCLE/BRCA_normalized_expression.txt", data.table = F) # read the first cancer. Initialy 18511x1108, gene_ids as first column
+rownames(TCGA) = TCGA$gene_ids #names to the rows
+TCGA = TCGA[,-1] #eliminate the first column
+sample_cancer = data.frame(colnames(TCGA), "BRCA") #matrix with the sample and the type of cancer. 1107x2
+colnames(sample_cancer) = c("Sample", "Cancer")
+
+## Download the rest of the data
+for (ca in cancers){
+  TCGA_can = fread(paste("/projects/qbio/bifo/users/Babak/TCGA_CCLE/", ca, "_normalized_expression.txt", sep = ""), data.table = F)
+  rownames(TCGA_can) = TCGA_can$gene_ids
+  sample_cancer_aux = data.frame(colnames(TCGA_can), ca) #2 columns data frame with the sample and the type of tumor
+  sample_cancer_aux <- sample_cancer_aux [-1,]
+  colnames(sample_cancer_aux) = c("Sample", "Cancer")
+  sample_cancer = rbind(sample_cancer, sample_cancer_aux) #bind the all the samples with their cancer type
+  TCGA_can = TCGA_can[,-1]
+  TCGA <- cbind(TCGA,TCGA_can)
+}
+  #TCGA: 18511genesx8769samp
+  #sample_cancer: 8769sampx2 
+
+## Select most variable genes
+num_varying = 5000 #this value can change
+IQR_TCGA_gene = apply(TCGA, 1, IQR) # 1 indicates rows, function IQR: calculate the 1st and 3rd quartile and then substract them. #length:18511
+varying_genes = IQR_TCGA_gene[order(IQR_TCGA_gene, decreasing = T)] # decreasing order
+varying_genes = names(varying_genes[1:num_varying])  # the highest 5000 names are saved
+TCGA_var = TCGA[varying_genes,] # taking the varying genes of TCGA. 5000genesx8769
+
+
+## PCA of TCGA - 5000
+TCGA.PCs <- prcomp(t(TCGA_var)) #this variable is for 5000 varying gene
+PCs <- as.data.frame(TCGA.PCs$x)
+PCs$group <- sample_cancer$Cancer[match(colnames(TCGA_var), sample_cancer$Sample)] #adds a column to PCs with the group
+
+g1 <- c( "BRCA","COADREAD", "GBM", "LAML","LUAD","OV","SKCM","UCEC") #group created to see them separtly
+PCs_g1 <- filter(PCs, group %in% g1)
+g2 <- c("BLCA","DLBC", "HNSC","LGG","LUSC","PAAD","STAD")
+PCs_g2 <- filter(PCs, group %in% g2)
+g3 <- c("CHOL", "ESCA", "KIRC","LIHC","MESO","PRAD","THCA")
+PCs_g3 <- filter(PCs, group %in% g3)
+
+
+## Scree plot of PC - 5000
+PCA.sdev <- TCGA.PCs$sdev^2 #sedev is the standard deviation of the principal components (squareroot of covariance/correlation matrix)
+PCA.per <- round(PCA.sdev/sum(PCA.sdev)*100, 1) #calculate the percentage
+pal <- colorRampPalette(colors = c("#FF6666", "#FFCC66"))(22) #pallete color
+barplot(PCA.per[1:20], main="Scree Plot - 5000", xlab="Principal Components", ylab="Percent Variation", space=0, col = pal, border = "#CC3333") 
+axis(side=1,at=c(0,20))
+
+
+## Create a custom color scale for PCA - 5000
+myColors <- hue_pal()(22) #color palette
+names(myColors) <- levels(PCs$group)
+colScale <- scale_colour_manual(name = "group",values = myColors)
+
+
+## PCA plot (this should be run with the 3 groups) - 5000
+p <- ggplot(PCs,aes(x=PC3,y=PC4,color=group)) #, scale. = FALSE))
+p <- p+geom_point() #+  xlim(-105, 210) + ylim(-105, 210) #This las part is when ploting g1, g2, g3
+p
+  # When ploting, rows where remove for missing values. g1:4, g2:1, g3:185
+
+
+## Loading of PC1 - PC2 - PC3
+PCs_load <- as.data.frame(TCGA.PCs$rotation)
+
+PC1 <- data.frame(PCs_load$PC1)
+rownames(PC1) <- row.names(PCs_load)
+PC2 <- data.frame(PCs_load$PC2)
+rownames(PC2) <- row.names(PCs_load)
+PC3 <- data.frame(PCs_load$PC3)
+rownames(PC3) <- row.names(PCs_load)
+
+# PC1 loading
+PC1_load_pos_aux <- PC1[order(-PC1), ,drop = F]# decreasing (positive values) order of PC1 
+genes_PC1 <- data.frame(rownames(PC1_load_pos_aux))
+genes_PC1_50_pos <- genes_PC1[1:50,] # genes in PC1 with more loading (+)
+
+PC1_load_neg_aux <- PC1[order(PC1), ,drop = F]# increasing (nagative values) order of PC1 
+genes_PC1 <- data.frame(rownames(PC1_load_neg_aux))
+genes_PC1_50_neg <- genes_PC1[1:50,] # genes in PC1 with more loading (-)
+
+# PC2 loading
+PC2_load_pos_aux <- PC2[order(-PC2), ,drop = F]# decreasing (positive values) order of PC2 
+genes_PC2 <- data.frame(rownames(PC2_load_pos_aux))
+genes_PC2_50_pos <- genes_PC2[1:50,] # genes in PC2 with more loading (+)
+
+PC2_load_neg_aux <- PC1[order(PC2), ,drop = F]# increasing (nagative values) order of PC2
+genes_PC2 <- data.frame(rownames(PC2_load_neg_aux))
+genes_PC2_50_neg <- genes_PC2[1:50,] # genes in PC2 with more loading (-)
+
+# PC3 loading
+PC3_load_pos_aux <- PC3[order(-PC3), ,drop = F]# decreasing (positive values) order of PC3 
+genes_PC3 <- data.frame(rownames(PC3_load_pos_aux))
+genes_PC3_50_pos <- genes_PC3[1:50,] # genes in PC3 with more loading (+)
+
+PC3_load_neg_aux <- PC3[order(PC3), ,drop = F]# increasing (nagative values) order of PC3 
+genes_PC3 <- data.frame(rownames(PC3_load_neg_aux))
+genes_PC3_50_neg <- genes_PC3[1:50,] # genes in PC3 with more loading (-)
+
+
+ 
+#-----------------------------------------------------------------------------------------------------------------
+
+##########################
+## PCA analysis of CCLE ##
+##########################
+
+## Download data - CCLE Normalized
+CCLE = fread("CCLE_normalized_expression.txt", data.table = F) #Initialy 18511x933, gene_ids as first column
+rownames(CCLE) = CCLE$gene_ids #names to the rows
+CCLE = CCLE[,-1] #eliminate the first column. 18511genesx932samples
+
+CCLE_meta = fread("CCLE_meta_filt.txt", data.table = F) #names of sample with their disease
+colnames(CCLE_meta) <- c("sample","cancer")
+
+## Select most variable genes
+num_varying = 5000 #this value can change
+IQR_CCLE_gene = apply(CCLE, 1, IQR) # 1 indicates rows, function IQR: calculate the 1st and 3rd quartile and then substract them. #length:18511 (genes)
+varying_genes = IQR_CCLE_gene[order(IQR_CCLE_gene, decreasing = T)] # decreasing order
+varying_genes = names(varying_genes[1:num_varying])  # the highest 5000 names are saved
+CCLE_var = CCLE[varying_genes,] # taking the varying genes of TCGA. 5000genesx932samples
+
+
+## PCA of CCLE - 5000
+CCLE.PCs <- prcomp(t(CCLE_var)) #this variable is for 5000 varying gene
+PCs <- as.data.frame(CCLE.PCs$x)
+PCs$group <- CCLE_meta$cancer[match(colnames(CCLE_var), CCLE_meta$sample)] #adds a column to PCs with the group
+
+#Groups in CCLE: BLCA	BRCA	CHOL	COADREAD	DLBC	ESCA	GBM	HNSC	KIPAN	KIRC	LAML	LCLL	LGG	LIHC	LUAD	LUSC	MESO	MM	OTHER	OV	PAAD	PRAD	SARC	SKCM	STAD	THCA	UCEC
+
+
+g1 <- c("BLCA","COADREAD","GBM","KIRC","LGG","LUSC","OTHER","PRAD","STAD") #group created to see them separtly
+PCs_g1 <- filter(PCs, group %in% g1)
+g2 <- c("BRCA","DLBC","HNSC","LAML","LIHC","MESO","OV","SARC","THCA")
+PCs_g2 <- filter(PCs, group %in% g2)
+g3 <- c("CHOL","ESCA","KIPAN","LCLL","LUAD","MM","PAAD","SKCM","UCEC")
+PCs_g3 <- filter(PCs, group %in% g3)
+
+
+## Screen plot of PC - 5000
+PCA.sdev <- CCLE.PCs$sdev^2 #sedev is the standard deviation of the principal components (squareroot of covariance/correlation matrix)
+PCA.per <- round(PCA.sdev/sum(PCA.sdev)*100, 1) #calculate the percentage
+pal <- colorRampPalette(colors = c("#FF6666", "#FFCC66"))(27) #pallete color
+barplot(PCA.per[1:20], main="Scree Plot - 5000", xlab="Principal Components", ylab="Percent Variation", space=0, col = pal, border = "#CC3333") 
+axis(side=1,at=c(0,20))
+
+
+## Create a custom color scale - 5000
+myColors <- hue_pal()(27) #color palette
+names(myColors) <- levels(PCs$group)
+colScale <- scale_colour_manual(name = "group",values = myColors)
+
+
+## PCA plot (this should be run with the 3 groups) - 5000
+p <- ggplot(PCs,aes(x=PC1,y=PC3,color=group)) #, scale. = FALSE))
+p <- p+geom_point() #+  xlim(-105, 210) + ylim(-105, 210) #This las part is when ploting g1, g2, g3
+p
+
+
+## Loading of PC1 - PC2 - PC3
+PCs_load <- as.data.frame(CCLE.PCs$rotation)
+
+PC1 <- data.frame(PCs_load$PC1)
+rownames(PC1) <- row.names(PCs_load)
+PC2 <- data.frame(PCs_load$PC2)
+rownames(PC2) <- row.names(PCs_load)
+PC3 <- data.frame(PCs_load$PC3)
+rownames(PC3) <- row.names(PCs_load)
+
+# PC1 loading
+PC1_load_pos_aux <- PC1[order(-PC1), ,drop = F]# decreasing (positive values) order of PC1 
+genes_PC1 <- data.frame(rownames(PC1_load_pos_aux))
+genes_PC1_50_pos <- genes_PC1[1:50,] # genes in PC1 with more loading (+)
+
+PC1_load_neg_aux <- PC1[order(PC1), ,drop = F]# increasing (nagative values) order of PC1 
+genes_PC1 <- data.frame(rownames(PC1_load_neg_aux))
+genes_PC1_50_neg <- genes_PC1[1:50,] # genes in PC1 with more loading (-)
+
+# PC2 loading
+PC2_load_pos_aux <- PC2[order(-PC2), ,drop = F]# decreasing (positive values) order of PC2 
+genes_PC2 <- data.frame(rownames(PC2_load_pos_aux))
+genes_PC2_50_pos <- genes_PC2[1:50,] # genes in PC2 with more loading (+)
+
+PC2_load_neg_aux <- PC1[order(PC2), ,drop = F]# increasing (nagative values) order of PC2
+genes_PC2 <- data.frame(rownames(PC2_load_neg_aux))
+genes_PC2_50_neg <- genes_PC2[1:50,] # genes in PC2 with more loading (-)
+
+# PC3 loading
+PC3_load_pos_aux <- PC3[order(-PC3), ,drop = F]# decreasing (positive values) order of PC3 
+genes_PC3 <- data.frame(rownames(PC3_load_pos_aux))
+genes_PC3_50_pos <- genes_PC3[1:50,] # genes in PC3 with more loading (+)
+
+PC3_load_neg_aux <- PC3[order(PC3), ,drop = F]# increasing (nagative values) order of PC3 
+genes_PC3 <- data.frame(rownames(PC3_load_neg_aux))
+genes_PC3_50_neg <- genes_PC3[1:50,] # genes in PC3 with more loading (-)
+
+# > write.table(x = genes_PC1_50_neg, file = "genes_PC1_50_neg_CCLE.txt")
+# > write.table(x = genes_PC1_50_pos, file = "genes_PC1_50_pos_CCLE.txt")
+# > write.table(x = genes_PC2_50_neg, file = "genes_PC2_50_neg_CCLE.txt")
+# > write.table(x = genes_PC2_50_pos, file = "genes_PC2_50_pos_CCLE.txt")
+# > write.table(x = genes_PC3_50_neg, file = "genes_PC3_50_neg_CCLE.txt")
+# > write.table(x = genes_PC3_50_pos, file = "genes_PC3_50_pos_CCLE.txt")
+
+#-----------------------------------------------------------------------------------------------------------------
+
+##########################################
+## PCA analysis of TCGA & CCLE together ##
+##########################################
+
+## Concatanate Normalized CCLE and TCGA 
+identical(rownames(TCGA), rownames(CCLE)) #check row names are the same
+TCGA_CCLE <- cbind(TCGA, CCLE) #concatanate 18511x8769
+
+## Select most variable genes
+num_varying = 5000 #this value can change
+IQR_TCGA_CCLE_gene = apply(TCGA_CCLE, 1, IQR) # 1 indicates rows, function IQR: calculate the 1st and 3rd quartile and then substract them. #length:18511 (genes)
+varying_genes = IQR_TCGA_CCLE_gene[order(IQR_TCGA_CCLE_gene, decreasing = T)] # decreasing order
+varying_genes = names(varying_genes[1:num_varying])  # the highest 5000 names are saved
+TCGA_CCLE_var = TCGA_CCLE[varying_genes,] # taking the varying genes of TCGA_CCLE. 5000genesx2039samples
+
+## PCA of TCGA_CCLE - 5000
+TCGA_CCLE.PCs <- prcomp(t(TCGA_CCLE_var)) #this variable is for 5000 varying gene
+PCs <- as.data.frame(TCGA_CCLE.PCs$x)
+
+## Meta data of CCLE and TCGA 
+TCGA_CCLE_meta <- read.table("TCGA_CCLE_meta.txt", header = T) #file construct on excel
+
+PCs$group <- TCGA_CCLE_meta$cancer[match(colnames(TCGA_CCLE_var), TCGA_CCLE_meta$sample)] #adds a column to PCs with the group
+
+
+g1 <- c("BRCA","CHOL","DLBC","GBM","KIPAN-CCLE","LAML-CCLE","LIHC","LUSC","MM-CCLE","PAAD","SARC-CCLE","STAD-CCLE","UCEC-CCLE") #group created to see them separtly
+PCs_g1 <- filter(PCs, group %in% g1)
+g2 <- c("BLCA","CHOL-CCLE","DLBC-CCLE","GBM-CCLE","KIRC","LCLL-CCLE","LIHC-CCLE","LUSC-CCLE","OTHER-CCLE","PAAD-CCLE","SKCM","THCA")
+PCs_g2 <- filter(PCs, group %in% g2)
+g3 <- c("BLCA-CCLE","COADREAD","ESCA","HNSC","KIRC-CCLE","LGG","LUAD","MESO","OV","PRAD","SKCM-CCLE","THCA-CCLE")
+PCs_g3 <- filter(PCs, group %in% g3)
+g4 <- c("BRCA-CCLE","COADREAD-CCLE","ESCA-CCLE","HNSC-CCLE","LAML","LGG-CCLE","LUAD-CCLE","MESO-CCLE","OV-CCLE","PRAD-CCLE","STAD","UCEC")
+PCs_g4 <- filter(PCs, group %in% g4)
+
+
+## Screen plot of PC - 5000
+PCA.sdev <- TCGA_CCLE.PCs$sdev^2 #sedev is the standard deviation of the principal components (squareroot of covariance/correlation matrix)
+PCA.per <- round(PCA.sdev/sum(PCA.sdev)*100, 1) #calculate the percentage
+pal <- colorRampPalette(colors = c("#FF6666", "#FFCC66"))(27) #pallete color
+barplot(PCA.per[1:20], main="Scree Plot - 5000", xlab="Principal Components", ylab="Percent Variation", space=0, col = pal, border = "#CC3333") 
+axis(side=1,at=c(0,20))
+
+
+## Create a custom color scale - 5000
+myColors <- hue_pal()(49) #color palette
+names(myColors) <- levels(PCs$group)
+colScale <- scale_colour_manual(name = "group",values = myColors)
+
+
+## PCA plot (this should be run with the 3 groups) - 5000
+p <- ggplot(PCs,aes(x=PC1,y=PC2,color=group)) #, scale. = FALSE))
+p <- p+geom_point() +  xlim(-105, 210) + ylim(-205, 150) #This las part is when ploting g1, g2, g3
+p
+
+####continuar para aca abajo
+
+## Loading of PC1 - PC2 - PC3
+PCs_load <- as.data.frame(TCGA_CCLE.PCs$rotation)
+
+PC1 <- data.frame(PCs_load$PC1)
+rownames(PC1) <- row.names(PCs_load)
+PC2 <- data.frame(PCs_load$PC2)
+rownames(PC2) <- row.names(PCs_load)
+PC3 <- data.frame(PCs_load$PC3)
+rownames(PC3) <- row.names(PCs_load)
+
+# PC1 loading
+PC1_load_pos_aux <- PC1[order(-PC1), ,drop = F]# decreasing (positive values) order of PC1 
+genes_PC1 <- data.frame(rownames(PC1_load_pos_aux))
+genes_PC1_50_pos <- genes_PC1[1:50,] # genes in PC1 with more loading (+)
+
+PC1_load_neg_aux <- PC1[order(PC1), ,drop = F]# increasing (nagative values) order of PC1 
+genes_PC1 <- data.frame(rownames(PC1_load_neg_aux))
+genes_PC1_50_neg <- genes_PC1[1:50,] # genes in PC1 with more loading (-)
+
+# PC2 loading
+PC2_load_pos_aux <- PC2[order(-PC2), ,drop = F]# decreasing (positive values) order of PC2 
+genes_PC2 <- data.frame(rownames(PC2_load_pos_aux))
+genes_PC2_50_pos <- genes_PC2[1:50,] # genes in PC2 with more loading (+)
+
+PC2_load_neg_aux <- PC1[order(PC2), ,drop = F]# increasing (nagative values) order of PC2
+genes_PC2 <- data.frame(rownames(PC2_load_neg_aux))
+genes_PC2_50_neg <- genes_PC2[1:50,] # genes in PC2 with more loading (-)
+
+# PC3 loading
+PC3_load_pos_aux <- PC3[order(-PC3), ,drop = F]# decreasing (positive values) order of PC3 
+genes_PC3 <- data.frame(rownames(PC3_load_pos_aux))
+genes_PC3_50_pos <- genes_PC3[1:50,] # genes in PC3 with more loading (+)
+
+PC3_load_neg_aux <- PC3[order(PC3), ,drop = F]# increasing (nagative values) order of PC3 
+genes_PC3 <- data.frame(rownames(PC3_load_neg_aux))
+genes_PC3_50_neg <- genes_PC3[1:50,] # genes in PC3 with more loading (-)
