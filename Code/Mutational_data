@@ -1,0 +1,79 @@
+# Read CCLE data of mutations, annotations and normalized expression
+
+CCLE_mut_data <- fread( "CCLE_mutation_calls.txt", data.table = F)
+
+cell_line_anno <- fread( "cell_line_annotations.txt", data.table = F)
+
+CCLE <- fread( "~/project1/ccle_vs_tcga/normalized_expression/CCLE_normalized_expression.txt", data.table = F)
+
+
+#####################
+### MUTATION DATA ###
+#####################
+
+
+# SELECT ONLY THE MUT. DATA FOR CELL LINES IN CCLE
+
+#Separate the Tumor Sample Barcodes so that it is only the cell line id
+CCLE_mut_data$Tumor_Sample_Barcode <- sapply(strsplit(CCLE_mut_data$Tumor_Sample_Barcode, '_', fixed = TRUE), '[', 1)
+
+# Delete some columns to only leave Tumor Sample Barcode, GeneID and Variant classification
+CCLE_mut_data <- CCLE_mut_data[,1:19]
+
+for (i in c(7:3)) {
+  CCLE_mut_data <- CCLE_mut_data[,-i]  
+}
+
+
+# Keep only the rows of matching cell lines
+CCLE_mut_data <- CCLE_mut_data[CCLE_mut_data$Tumor_Sample_Barcode %in% colnames(CCLE),]
+
+
+# Look into which cell lines are not in the mutation data
+length(unique(CCLE_mut_data$Tumor_Sample_Barcode))
+length(colnames(CCLE))
+
+colnames(CCLE[!colnames(CCLE) %in% CCLE_mut_data$Tumor_Sample_Barcode])
+
+# ---> TTOESOPHAG is not in the mutation data
+
+#Delete TTOESOPHAG column from CCLE
+CCLE <- CCLE[,-grep("TTOESOPHAG", colnames(CCLE))]
+
+
+####################
+## CREATE BOXPLOT ##
+####################
+
+# If you want to change gene or number of Variant Classifications:
+gene = "A1BG"
+var_class = c(unique(CCLE_mut_data$Variant_Classification)[2:4])
+
+
+
+# Find sample names of those which have silent mutations, for "gene"
+gen_of_int <- CCLE_mut_data[grep(gene, CCLE_mut_data$Hugo_Symbol),] # Table with all rows for the gene of interest
+Var_Class_gene <- gen_of_int[grep("Silent", gen_of_int$Variant_Classification),] # Table with rows for the gene of interest and the var.class of interest
+
+var_class_counts <- data.table(CCLE[grep(gene, CCLE$gene_ids), colnames(CCLE) %in% Var_Class_gene$Tumor_Sample_Barcode])# Counts for the "silent" samples 
+colnames(var_class_counts) <- as.character(c(1:length(var_class_counts))) # Change
+
+
+for (i in var_class) { 
+  
+  Var_Class_gene <- gen_of_int[grep( i, gen_of_int$Variant_Classification),] # Keep only the rows with the var.class of interest
+  counts <- data.table(CCLE[grep(gene, CCLE$gene_ids), colnames(CCLE) %in% Var_Class_gene$Tumor_Sample_Barcode]) # Take the counts of the cells matching the gene OI and samples from Var_Class_gene
+  colnames(counts) <- as.character(c(1:length(counts)))
+  var_class_counts <- rbind(var_class_counts, counts, fill = TRUE) 
+  
+}  
+var_class_counts <- data.frame(t(var_class_counts))
+
+colnames(var_class_counts) <- c("Silent", var_class)
+
+boxplot(var_class_counts[,1:ncol(var_class_counts)],
+        main = as.character(gene),
+        names = c("Silent", var_class),
+        ylab = "Normalized Expression",
+        col = colorRampPalette(colors = c("#41ae76", "#084594" ))(ncol(var_class_counts)) # http://colorbrewer2.org/
+)
