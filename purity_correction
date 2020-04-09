@@ -25,7 +25,7 @@ pur.cor = data.frame(sapply(pur.cor,function(x)x$p.value), sapply(pur.cor,functi
 rownames(pur.cor) = rownames(TCGA) # add rownames 
 colnames(pur.cor) = c("pvalue", "rho") # add colnames
 pur.cor$padj = p.adjust(pur.cor$pvalue) # add column with adjusted p-values
-purity_genes = pur.cor[pur.cor$padj < 0.01 & pur.cor$rho < -0.4 & complete.cases(pur.cor),] # New table. It contains the most significant negatively correlated genes. These are supposedly the ones that are from normal cells and not tumor cells.
+purity_genes = pur.cor[pur.cor$padj < 0.01 & pur.cor$rho < -0.6 & complete.cases(pur.cor),] # New table. It contains the most significant negatively correlated genes. These are supposedly the ones that are from normal cells and not tumor cells.
 purity_genes = rownames(purity_genes) # take the rownames of the least pure genes
 TCGA = TCGA[!(rownames(TCGA) %in% purity_genes),] # Use the genes that are not in purity_genes
 
