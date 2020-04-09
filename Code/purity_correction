@@ -1,0 +1,47 @@
+###########################################
+## ADJUST ALL NORMALIZED DATA FOR PURITY ##
+###########################################
+
+# Read the purity estimates for the TCGA samples
+purity_info = read.table("TCGA_Purity_Estimates.txt", header = T) # read tcga purity estimates into table, are these percentages?
+
+# The cancers with purity estimates, left out are LAML and DLBC
+cancers <- c("BLCA", "BRCA", "CHOL", "COADREAD", "ESCA", "GBM", "PAAD", "KIRC", "HNSC", "LUSC", "LUAD", "LIHC", "LGG", "PRAD", "MESO", "OV", "UCEC", "THCA", "STAD", "SKCM" ) # Not including BLCA here, as it is the initial cancer in TCGA.norm.counts
+
+for (cancer in cancers) {
+  
+# Read the UQ normalized, log transformed expression data
+TCGA = fread(paste("normalized_expression/", cancer, "_normalized_expression.txt", sep = ""), data.table = F) #read the table from PAAD
+rownames(TCGA) = TCGA$gene_ids
+TCGA = TCGA[,-1]
+
+
+
+# remove genes that are significantly correlated with tumor purity
+TCGA = TCGA[, intersect(purity_info$sample, colnames(TCGA))]          # Select TCGA samples with purity info
+tumors_purity = purity_info[purity_info$sample %in% colnames(TCGA), ] # Select the purity info for the relevant TCGA samples.
+pur.cor = lapply(rownames(TCGA), function(x)cor.test(as.numeric(TCGA[x,]),tumors_purity$purity, method = "s")) # Calculate the correlation between every sample and the purity estimates.
+pur.cor = data.frame(sapply(pur.cor,function(x)x$p.value), sapply(pur.cor,function(x)x$estimate)) # Make dataframe of the p-values of the correlations and the spearman estimates. 
+rownames(pur.cor) = rownames(TCGA) # add rownames 
+colnames(pur.cor) = c("pvalue", "rho") # add colnames
+pur.cor$padj = p.adjust(pur.cor$pvalue) # add column with adjusted p-values
+purity_genes = pur.cor[pur.cor$padj < 0.01 & pur.cor$rho < -0.6 & complete.cases(pur.cor),] # New table. It contains the most significant negatively correlated genes. These are supposedly the ones that are from normal cells and not tumor cells.
+purity_genes = rownames(purity_genes) # take the rownames of the least pure genes
+TCGA = TCGA[!(rownames(TCGA) %in% purity_genes),] # Use the genes that are not in purity_genes
+
+  
+#adjust for tumor purity with linear regression
+tumors_infiltrate = 1 - tumors_purity$purity  # 1 - the purity estimates
+design = model.matrix(~ tumors_infiltrate) # create a design matrix adding a column of ones.
+fit <- lmFit(TCGA,design)                   # Fit the TCGA to the design matrix. (fit the counts and the purity)                                        
+beta <- fit$coefficients[,2,drop=FALSE]   # Take the coefficients of tumors_infiltrate 
+TCGA_adjusted = as.matrix(TCGA) - beta %*% t(tumors_infiltrate) # Adjust TCGA by subtracting the coefficients for tumors infiltrate times the transposed tumors_infiltrate values
+
+
+# Create a directory for purity adjusted data if it does not exist already
+ifelse(!dir.exists(file.path(paste("normalized_expression/purity_adjusted", sep = ""))), dir.create(file.path(paste("normalized_expression/purity_adjusted", sep = ""))), FALSE)
+
+#Save the purity adjusted
+saveRDS(TCGA_adjusted, paste("normalized_expression/purity_adjusted/", cancer, "_pure_expression", ".rds", sep=""))
+
+}
