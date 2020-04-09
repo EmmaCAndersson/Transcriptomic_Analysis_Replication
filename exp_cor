@@ -1,0 +1,36 @@
+
+cancer <- "OV"
+
+# Read the TCGA expression data for the tumor type
+if (cancer == "LAML" | cancer == "DLBC"){  # For LAML and DLBC, there is no purity data. Read the normalized expression data.
+  
+  TCGA <- fread(paste("normalized_expression/", cancer, "_normalized_expression.txt", sep = ""), data.table = F) #read the table from PAAD
+  rownames(TCGA) = TCGA$gene_ids
+  TCGA = TCGA[,-1]
+  
+}else{ # Otherwise read the purity adjusted data
+  TCGA <- readRDS(paste("normalized_expression/purity_adjusted/", cancer, "_pure_expression", ".rds", sep=""))
+}
+
+# Read the CCLE expression data
+CCLE = fread("normalized_expression/CCLE_normalized_expression.txt", data.table = F) # read the CCLE_norm_exp, not as a data table                          
+rownames(CCLE) = CCLE$gene_ids #Remove the first column of the table and use it as rownames instead
+CCLE = CCLE[,-1]
+
+# Find the 5000 genes with the highest differential expression
+varying_genes = apply(TCGA, 1, IQR) # Calculate the IQR for each gene
+varying_genes = varying_genes[order(varying_genes, decreasing = T)] # Order the iqr_genes from highest to lowest IQR value. They should be ordered fror the wilcoxon test?        
+varying_genes = names(varying_genes[1:5000]) # Only use the names of the top 5k ordered genes. These are the top varying genes because the difference between lowly and highly expressed is big.   
+  
+# Specify which samples should be used
+cell_lines <- colnames(CCLE) # List of CCLE the cell lines
+tumor_samples <- colnames(TCGA) # List of the tumor samples
+
+# Calculate correlation values
+exp_cor_matrix = cbind(TCGA[varying_genes,],CCLE[varying_genes,]) # Bind the TCGA and CCLE data
+exp_cor_matrix = cor(exp_cor_matrix, method = "s") # Compute expression correlation matrix
+exp_cor_matrix <- exp_cor_matrix[tumor_samples, cell_lines] # Select the rows and cols of interest
+exp_cor_matrix <- data.frame(exp_cor_matrix) 
+
+# Calculate median correlation and rank cell lines after highest median cor
+exp_cor_median <- apply(exp_cor_matrix, 2, median)
