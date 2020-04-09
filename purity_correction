@@ -6,7 +6,7 @@
 purity_info = read.table("TCGA_Purity_Estimates.txt", header = T) # read tcga purity estimates into table, are these percentages?
 
 # The cancers with purity estimates, left out are LAML and DLBC
-cancers <- c("BLCA", "BLCA", "CHOL", "COADREAD", "ESCA", "GBM", "PAAD", "KIRC", "HNSC", "LUSC", "LUAD", "LIHC", "LGG", "PRAD", "MESO", "OV", "UCEC", "THCA", "STAD", "SKCM" ) # Not including BLCA here, as it is the initial cancer in TCGA.norm.counts
+cancers <- c("BLCA", "BRCA", "CHOL", "COADREAD", "ESCA", "GBM", "PAAD", "KIRC", "HNSC", "LUSC", "LUAD", "LIHC", "LGG", "PRAD", "MESO", "OV", "UCEC", "THCA", "STAD", "SKCM" ) # Not including BLCA here, as it is the initial cancer in TCGA.norm.counts
 
 for (cancer in cancers) {
   
