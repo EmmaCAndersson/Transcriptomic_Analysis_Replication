@@ -1,0 +1,457 @@
+#install the package
+BiocManager::install("TCGAbiolinks")
+BiocManager::install("corrplot")
+BiocManager::install("corrgram")
+BiocManager::install("tidyverse")
+BiocManager::install("dplyr")
+BiocManager::install("lemon")
+
+install.packages('plyr')
+
+library(TCGAbiolinks)
+library(corrplot)
+library(RColorBrewer)
+library(corrgram)
+library(data.table)
+library(pheatmap)
+library(gplots)
+library(ggplot2)
+library(pheatmap)
+library(viridis)
+library(edgeR)
+library(plyr)
+library(tidyverse)
+library(dplyr)
+library(grid)
+library(RColorBrewer)
+library(lemon)
+library(ggrepel)
+library(ggpubr)
+
+
+cancer = "UCEC" #select tumor type
+
+comparison_gene_set = "TCGA_5k" # select number of most variable genes (other options: "TCGA_10k", "all_genes")
+
+############
+# Functions
+###########
+
+#compare correlations between tumors and dz related cell lines to non dz related cell lines
+
+is_outlier <- function(cancer, cell_line_one_tumor_anno){
+  ccle_tcga_target_celllines = CCLE.meta$CCLE.name[(CCLE.meta$disease == cancer)]
+  cor_same = cell_line_one_tumor_anno$cor[cell_line_one_tumor_anno$CCLE.name  %in% ccle_tcga_target_celllines]
+  cor_others = cell_line_one_tumor_anno$cor[!(cell_line_one_tumor_anno$CCLE.name  %in% ccle_tcga_target_celllines)]
+  p = wilcox.test(cor_same, cor_others, alternative = 'greater')  
+  return(p$p.value)
+}
+
+#function to check if the cell line most correlated with the TCGA sample is from the same tumor type
+
+is_outlier3 <- function(cancer, cell_line_one_tumor_anno){
+  cell_line_one_tumor_anno.ordered = cell_line_one_tumor_anno[order(-cell_line_one_tumor_anno$cor),]
+  if(as.character(cell_line_one_tumor_anno.ordered$disease[1]) == cancer){
+    return("YES")
+  } else {
+    return("NO")
+  }
+}
+
+###############
+#    MAIN 
+###############
+
+#read in UQ normalized + log transformed CCLE and TCGA expression data + corrected by data type
+
+    #combat # load("/projects/qbio/bifo/users/Trinidad/Reproduction/TCGA_CCLE_2/TCGA_CCLE_batch_corrected.RData")
+    
+    
+    combat <- as.data.frame(combat)
+   
+    CCLE = select(combat, -starts_with("TCGA")) #selecting the data that does not start with TCGA, are all the ones that are CCLE
+    
+    #This is run, so we will match this TCGA samples names to the combat matrix
+    TCGA_norm = fread(paste("Normalized_Data/",cancer, "_normalized_expression.txt", sep = ""), data.table = F)
+    rownames(TCGA_norm) = TCGA_norm$gene_ids
+    TCGA_norm = TCGA_norm[,-1]
+    
+    #Selection of TCGA from combat
+    
+    insertion = substring(colnames(combat),1,12) %in% substring(colnames(TCGA_norm),1,12)
+    
+    TCGA = combat [, which(insertion == TRUE)]
+    
+#read in CCLE mapping info and TCGA purity info
+
+CCLE.meta = read.table("CCLE_meta.txt", sep = "\t", header = T, stringsAsFactors = F)
+purity_info = read.table("TCGA_Purity_Estimates.txt", header = T)
+
+##adjust for tumor purity if purity information available (solid tumors only)
+if (cancer == "LAML" | cancer == "DLBC"){
+  #purity estimates not available for blood cancers, skip purity adjustment
+  TCGA_adjusted = TCGA
+}else{
+  #remove genes that are significantly correlated with tumor purity
+  TCGA = TCGA[, intersect(purity_info$sample, colnames(TCGA))]
+  tumors_purity = purity_info[purity_info$sample %in% colnames(TCGA), ]
+  tmp=lapply(rownames(TCGA), function(x)cor.test(as.numeric(TCGA[x,]),tumors_purity$purity, method = "s"))
+  tmp.df = data.frame(sapply(tmp,function(x)x$p.value), sapply(tmp,function(x)x$estimate))
+  rownames(tmp.df) = rownames(TCGA)
+  colnames(tmp.df) = c("pvalue", "rho")
+  tmp.df$padj = p.adjust(tmp.df$pvalue)
+  tmp.df.sig = tmp.df[tmp.df$padj < 0.01 & tmp.df$rho < -0.4 & complete.cases(tmp.df),]
+  purity_genes = rownames(tmp.df.sig)
+  TCGA = TCGA[!(rownames(TCGA) %in% purity_genes),]
+  
+  #adjust for tumor purity with linear regression
+  tumors_infiltrate = 1 - tumors_purity$purity
+  design = model.matrix(~ tumors_infiltrate)
+  fit <- lmFit(TCGA,design)
+  beta <- fit$coefficients[,2,drop=FALSE]
+  TCGA_adjusted = as.matrix(TCGA) - beta %*% t(tumors_infiltrate)
+}
+
+## select most variable genes
+if (comparison_gene_set == "TCGA_5k"){
+  iqr_gene = apply(TCGA_adjusted, 1, IQR)
+  varying_genes = iqr_gene[order(iqr_gene, decreasing = T)]
+  varying_genes = names(varying_genes[1:5000])
+}else if (comparison_gene_set == "TCGA_10k"){
+  iqr_gene = apply(TCGA2, 1, IQR)
+  varying_genes = iqr_gene[order(iqr_gene, decreasing = T)]
+  varying_genes = names(varying_genes[1:10000])
+}else if (comparison_gene_set == "all_genes"){
+  varying_genes = rownames(TCGA2)
+}else{
+  stop("error: need comparison gene set")
+}
+
+TCGA_CCLE = cbind(TCGA_adjusted[varying_genes,],CCLE[varying_genes,])
+
+##make cancer specific directory if does not exist already
+ifelse(!dir.exists(file.path(paste("results_paper_TCGA_CCLE/", cancer, sep = ""))), dir.create(file.path(paste("results_paper_TCGA_CCLE/", cancer, sep = ""))), FALSE)
+
+TCGA_CCLE_cor = cor(TCGA_CCLE, method = "s") 
+
+cell_lines <- as.character(colnames(CCLE))
+
+
+
+########################
+## Analyzing by Subtype
+########################
+
+#The base to work is TCGA_CCLE_cor (5000 genes x 1974 samples (932 CCLE + 1042 TCGA BRCA))
+
+subtypes <- PanCancerAtlas_subtypes()
+subtypes_df <- as.data.frame(PanCancerAtlas_subtypes())
+
+# histogram of selectied subtypes
+  # ggplot(subtypes, aes(x=Subtype_mRNA, fill = cancer.type)) + geom_bar() + ggpubr::rotate_x_text()
+
+
+
+
+#Meta-Matrix of Cancer Samples with their Subtypes
+  Cancer_meta_subtypes <- as.data.frame(colnames(TCGA))
+  colnames(Cancer_meta_subtypes) <- "Cancer_Samples"
+  Cancer_meta_subtypes$Subtype <- subtypes_df$Subtype_Selected[match(substring(Cancer_meta_subtypes$Cancer_Samples, 1,12), 
+                                                                 substring(subtypes_df$pan.samplesID, 1,12))] #this adds a new column with the subtype of cancer
+  
+  
+  
+#######################################################
+## Make the correlation first and then take the mean ## this is how they did it in the paper of TCGA and CCLE
+#######################################################
+#Correlation between each TCGA sample with each CCLE sample
+  TCGA_CCLE_Subtype_cor_s <- TCGA_CCLE_cor #it has been run above the correlation
+  
+  identical(as.character(Cancer_meta_subtypes$Cancer_Samples), colnames(TCGA_CCLE_Subtype_cor_s[, 1:length(Cancer_meta_subtypes$Cancer_Samples)])) #True
+  
+  #new colnames for TCGA_CCLE_Subtype_cor_s. Puting the name of the subtype in the samples of TCGA, and keeping the rest
+  new_colnames <- c(Cancer_meta_subtypes$Subtype, colnames(TCGA_CCLE_Subtype_cor_s[, (1+ length(Cancer_meta_subtypes$Cancer_Samples)) : length(colnames(TCGA_CCLE_Subtype_cor_s)) ]))
+  
+  colnames(TCGA_CCLE_Subtype_cor_s) <- new_colnames #replace colnames by the subtype 
+  
+  
+#Matrix of interest
+  interest_matrix <- TCGA_CCLE_Subtype_cor_s[ (1+ length(Cancer_meta_subtypes$Cancer_Samples)) : length(colnames(TCGA_CCLE_Subtype_cor_s)) , #rows selected
+                                              1: length(Cancer_meta_subtypes$Cancer_Samples) ] #columns selected
+  
+  
+#Taking the mean of the subtype
+  interest_matrix <- as.data.frame(interest_matrix)
+  subtype_mean <- sapply(split.default(interest_matrix, colnames(interest_matrix)), rowMeans)
+  #the split.default separate the matrix according to the colnames, then we take the mean
+  
+  subtype_gene_cor_s <- subtype_mean
+  # If in any name of subtype there is the following symbol "-" replace it by "_"
+    colnames(subtype_gene_cor_s) <- gsub("-", "_", colnames(subtype_gene_cor_s)) # Replace all '-' occurrences with '_'
+
+  subtype_gene_cor_s_meta <- as.data.frame(subtype_gene_cor_s)
+  subtype_gene_cor_s_meta$CCLE <- rownames(subtype_gene_cor_s_meta)
+  subtype_gene_cor_s_meta$CCLE_Cancer_Type <- CCLE.meta$disease[match(subtype_gene_cor_s_meta$CCLE,CCLE.meta$barcode)] #this adds a new column with the subtype of cancer
+
+ 
+    
+#Creates a directory to save the plots if is not already made
+  ifelse(!dir.exists(file.path(paste("Plots_Subtypes_Correlation/", cancer, sep = ""))), 
+         dir.create(file.path(paste("Plots_Subtypes_Correlation/", cancer, sep = ""))), FALSE)  
+  
+# Plot
+  
+  # Variables:
+  
+    # Plot and list of subtypes
+      plots_subtypes <- list() 
+      list_subtypes <- colnames(subtype_gene_cor_s)
+      #length(list_subtypes)
+    
+    # Limits of the plots
+      max_lim <- 0
+      min_lim <- 1
+      
+    # Matrix Melted
+      melt_matrix_subtype <- data.frame(Correlation = numeric(), CCLE = character(), CCLE_Cancer_Type = character(), Subtype = character())
+      melt_matrix_subtype_complete <- data.frame(Correlation = numeric(), CCLE = character(), CCLE_Cancer_Type = character(), Subtype = character())
+    
+  
+  ## Create a custom color scale - 5000
+  dd <- unique(subtype_gene_cor_s_meta$CCLE_Cancer_Type)
+  dd.col <- hue_pal(h = c(0, 700))(length(dd))
+  names(dd.col) <- dd
+  
+  # show_col(hue_pal(h = c(0, 700))(27))
+  
+  CCLE_colors_string <- paste('"',dd,'"=','"', dd.col,'"', ',', sep = "")
+  # to see what is inside use cat()
+  cat(CCLE_colors_string)
+  CCLE_colors <- c("OTHER"="#FF6C91", "HNSC"="#F07E4D", "MM"="#D79000", "COADREAD"="#B3A000", "BLCA"="#7FAE00", "OV"="#00B81B", "STAD"="#00BF75", "BRCA"="#00C1AC", "LUSC"="#00BCD8", "UCEC"="#00AEF9", "DLBC"="#7698FF", "SKCM"="#C77CFF", "LAML"="#F166E9", "KIRC"="#FF62BF", "ESCA"="#FE6E8A", "LUAD"="#EE8042", "PRAD"="#D39200", "MESO"="#AEA200", "LCLL"="#77AF00", "GBM"="#00B92D", "PAAD"="#00BF7C", "SARC"="#00C0B2", "LIHC"="#00BBDD", "NA"="#00ACFB", "LGG"="#8395FF", "THCA"="#CE79FF", "KIPAN"="#F464E5", "CHOL"="#FF62BA")
+  
+  
+  
+  ##################################################################################
+
+
+  # Loop to select min and max limit of the multiple plots, and creating the melting matrix
+  for (plot_numb in 1:length(list_subtypes)) {
+    
+    #plot_numb = 1 #to try the script first
+    
+    subtype <- list_subtypes[plot_numb] 
+    Subtype_cor_s_i <- subtype_gene_cor_s_meta[order(-subtype_gene_cor_s_meta[[subtype]]),]
+    Subtype_cor_s_i <- Subtype_cor_s_i[1:30,] #taking the 30 CCLE with higher correlation
+    
+    # Melt matrix
+    aux_melt_matrix <- Subtype_cor_s_i[, c(plot_numb, length(list_subtypes)+1, length(list_subtypes)+2)]
+    colnames(aux_melt_matrix)[1] <- "Correlation"
+    aux_melt_matrix$Subtype <- list_subtypes[plot_numb] 
+    melt_matrix_subtype <- rbind(melt_matrix_subtype, aux_melt_matrix)
+    
+    # Defining the max limit of y-axis of the multiple plots
+    if( max(Subtype_cor_s_i[,plot_numb]) > max_lim ) {
+      max_lim <- max(Subtype_cor_s_i[,plot_numb])
+    }
+    
+    # Defining the min limit of y-axis of the multiple plots
+    if( min(Subtype_cor_s_i[,plot_numb]) < min_lim ) {
+      min_lim <- min(Subtype_cor_s_i[,plot_numb])
+    }
+  }
+ 
+  melt_matrix_subtype <- melt_matrix_subtype[order(-melt_matrix_subtype$Correlation),]
+  melt_matrix_subtype <- melt_matrix_subtype[order(melt_matrix_subtype$Subtype),]
+  
+  saveRDS(melt_matrix_subtype, "Matrix_Subtype.RData")
+  
+  
+  
+  ################################
+  ## Make the complete melt matrix
+  ################################
+  
+  
+  # Loop to select min and max limit of the multiple plots, and creating the melting matrix
+  for (plot_numb2 in 1:length(list_subtypes)) {
+    
+    #plot_numb2 = 1 #to try the script first
+    
+    subtype <- list_subtypes[plot_numb2] 
+    Subtype_cor_s_i <- subtype_gene_cor_s_meta[order(-subtype_gene_cor_s_meta[[subtype]]),]
+    
+    # Melt matrix
+    aux_melt_matrix <- Subtype_cor_s_i[, c(plot_numb2, length(list_subtypes)+1, length(list_subtypes)+2)]
+    colnames(aux_melt_matrix)[1] <- "Correlation"
+    aux_melt_matrix$Subtype <- list_subtypes[plot_numb2] 
+    melt_matrix_subtype_complete <- rbind(melt_matrix_subtype_complete, aux_melt_matrix)
+    
+  }
+  
+  melt_matrix_subtype_complete <- melt_matrix_subtype_complete[order(-melt_matrix_subtype_complete$Correlation),]
+  melt_matrix_subtype_complete <- melt_matrix_subtype_complete[order(melt_matrix_subtype_complete$Subtype),]
+  
+  save.image(melt_matrix_subtype_complete, "Matrix_Subtype_Complete.RData")
+  save(melt_matrix_subtype_complete,file="Matrix_Subtype_Complete.Rda")
+  
+  
+  # Loop to generate the plots
+  for (plot_numb in 1:length(list_subtypes)) {
+  
+    #plot_numb = 3 #to try the script first
+    
+    subtype <- list_subtypes[plot_numb] 
+    Subtype_cor_s_i <- subtype_gene_cor_s_meta[order(-subtype_gene_cor_s_meta[[subtype]]),]
+    Subtype_cor_s_i <- Subtype_cor_s_i[1:30,] #taking the 30 CCLE with higher correlation
+  
+    
+    # For the first plot, insert the y-label (not for the rest)
+    if(plot_numb == 1){
+      
+      #Plot of the 30 CCLE more correlated to the subtype of cancer
+      Subtype_cor_s_i$CCLE <- factor(Subtype_cor_s_i$CCLE, levels = Subtype_cor_s_i$CCLE) #to maintain the order of CCLE in the plot
+      Subtype_cor_s_plot_30_i <- ggplot(Subtype_cor_s_i, 
+                                        aes_string(x ="CCLE", y = subtype, fill = "CCLE_Cancer_Type", color = "CCLE_Cancer_Type")) +
+                                        xlab("CCLE") +
+                                        ylab("Spearman Correlation") +
+                                        geom_point(size = 3)+ 
+                                        theme(axis.text.x = element_text(angle = 45)) +
+                                        ylim(min_lim, max_lim) +
+                                        ggtitle(subtype) +
+                                        theme(plot.title = element_text(hjust = 0.5)) +
+                                        scale_fill_manual(name = "CCLE_Cancer_Type",values = CCLE_colors) +
+                                        scale_color_manual(name = "CCLE_Cancer_Type",values = CCLE_colors) + 
+                                        #theme(legend.position="none")+
+                                        geom_text_repel(aes_string(x ="CCLE", y = subtype, label = "CCLE")) +
+                                        theme(axis.text.x = element_blank())
+                                         
+   
+      
+    }else{
+      # For the rest of the plots, do not put the y-label
+      # Plot of the 30 CCLE more correlated to the subtype of cancer
+      Subtype_cor_s_i$CCLE <- factor(Subtype_cor_s_i$CCLE, levels = Subtype_cor_s_i$CCLE) #to maintain the order of CCLE in the plot
+      Subtype_cor_s_plot_30_i <- ggplot(Subtype_cor_s_i, 
+                                        aes_string(x ="CCLE", y = subtype, fill = "CCLE_Cancer_Type", color = "CCLE_Cancer_Type")) +
+        xlab("CCLE") +
+        ylab(NULL)  +
+        geom_point(size = 3)+ 
+        theme(axis.text.x = element_text(angle = 45)) +
+        ylim(min_lim, max_lim) +
+        ggtitle(subtype) +
+        theme(plot.title = element_text(hjust = 0.5)) +
+        scale_fill_manual(name = "CCLE_Cancer_Type",values = CCLE_colors) +
+        scale_color_manual(name = "CCLE_Cancer_Type",values = CCLE_colors) + 
+        #theme(legend.position="none") +
+        geom_text_repel(aes_string(x ="CCLE", y = subtype, label = "CCLE")) +
+        theme(axis.text.x = element_blank())
+      
+     } 
+
+
+     plots_subtypes[[plot_numb]] <- Subtype_cor_s_plot_30_i
+       png(file=paste("Plots_Subtypes_Correlation/", cancer, "/", cancer,"_Subtype_", subtype, "_cor_s_plot_30.png", sep=""),
+          width=1267, height=466) #save the plot
+       plots_subtypes[[plot_numb]] #Subtype_cor_s_plot_30_i 
+      dev.off()
+
+  }
+
+  # Save all the subtype plots of the cancer type
+  plots_UCEC_subtypes <-  plots_subtypes
+  
+  ## Multiple plots - Subtypes of Cancer
+      png(file=paste("Plots_Subtypes_Correlation/", cancer, "/", cancer,"_Subtype_All_cor_s_plot.png", sep=""), width=1267, height=700) #save the plot  
+      grid.newpage()
+      grid_arrange_shared_legend(plots_subtypes[[1]], 
+                                 plots_subtypes[[2]],
+                                 plots_subtypes[[3]],
+                                 plots_subtypes[[4]],
+                                 plots_subtypes[[5]],
+                                 ncol=length(plots_subtypes), nrow=1)
+      dev.off()
+          
+      ggarrange(plots_subtypes[[2]], 
+                plots_subtypes[[1]],
+                plots_subtypes[[3]],
+                plots_subtypes[[4]],
+                plots_subtypes[[5]],
+                ncol=length(plots_subtypes), nrow=1,
+                common.legend = TRUE,
+                legend = "bottom")    
+      
+      
+      
+      ################################
+      ## Plot Melting Matrix
+      #############################
+      
+      
+      
+      melt_matrix_subtype$CCLE <- factor(melt_matrix_subtype$CCLE, levels = unique(melt_matrix_subtype[order(melt_matrix_subtype$Correlation), "CCLE"]))
+      
+      ggplot(melt_matrix_subtype, 
+             aes_string(x ="CCLE", y = "Correlation", fill = "CCLE_Cancer_Type", color = "CCLE_Cancer_Type")) +
+        facet_grid(cols = vars(Subtype)) +
+        xlab("CCLE") +
+        ylab(NULL)  +
+        geom_point(size = 3, stat = "identity")+ 
+        theme(axis.text.x = element_text(angle = 45)) +
+        ylim(min_lim, max_lim) +
+        #ggtitle(subtype) +
+        theme(plot.title = element_text(hjust = 0.5)) +
+        scale_fill_manual(name = "CCLE_Cancer_Type",values = CCLE_colors) +
+        scale_color_manual(name = "CCLE_Cancer_Type",values = CCLE_colors) + 
+        #theme(legend.position="none") +
+        geom_text_repel(aes_string(x ="CCLE", y = "Correlation", label = "CCLE")) +
+        theme(axis.text.x = element_blank())
+      
+      
+      
+      mtcars3$car <- factor(mtcars2$car, levels = mtcars2[order(mtcars$mpg), "car"])
+      x <- ggplot(mtcars3, aes(y = car, x = mpg)) + geom_point(stat = "identity")
+      
+      
+      
+      
+      stat = "identity"
+      
+      
+     melt_matrix_subtype %>%
+        arrange(Correlation) %>%    # First sort by val. This sort the dataframe but NOT the factor levels
+        mutate(name=factor(CCLE, levels=CCLE)) %>%   # This trick update the factor levels
+        ggplot( aes(x=CCLE, y=Correlation)) +
+        geom_segment( aes(xend=CCLE, yend=0)) +
+        geom_point( size=4, color="orange") +
+        coord_flip() +
+        theme_bw() +
+        xlab("")
+      
+  
+     melt_matrix_subtype$CCLE = with(melt_matrix, reorder(CCLE, Correlation, median))
+     
+     p <- melt_matrix_subtype %>%
+       ggplot( aes(x=CCLE, y=Correlation, fill=CCLE_Cancer_Type)) + 
+       geom_point() +
+       xlab("class") +
+       theme(legend.position="none") +
+       xlab("")
+     
+     
+     
+     
+     
+     ggplot(melt_matrix_subtype, aes_string(x ="CCLE", y = "Correlation", fill = "CCLE_Cancer_Type", color = "CCLE_Cancer_Type")) +
+       xlab("CCLE") +
+       ylab("Spearman Correlation") +
+       geom_point(size = 3)+ 
+       # theme(axis.text.x = element_text(angle = 45)) +
+       ylim(min_lim, max_lim) +
+       ggtitle("Correlation") +
+       theme(plot.title = element_text(hjust = 0.5)) +
+       scale_fill_manual(name = "CCLE_Cancer_Type",values = CCLE_colors) +
+       scale_color_manual(name = "CCLE_Cancer_Type",values = CCLE_colors) + 
+       #theme(legend.position="none")+
+       geom_text_repel(aes_string(x ="CCLE", y = "Correlation", label = "CCLE")) +
+       theme(axis.text.x = element_blank())
+     
